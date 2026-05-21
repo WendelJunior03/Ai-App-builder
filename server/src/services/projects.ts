@@ -8,17 +8,103 @@ const CONFIG_DIR = join(WORKSPACE_DIR, ".builder")
 const CONFIG_FILE = join(CONFIG_DIR, "projects.json")
 const PROJECTS_DIR = join(WORKSPACE_DIR, "projects")
 const RESERVED_ROOT_ENTRIES = new Set([".builder", "projects", "node_modules"])
+const MAX_TOKEN_USAGE_REQUESTS = 50
+const FALLBACK_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "opencode/deepseek-v4-flash-free": 200_000,
+  "opencode/nemotron-3-super-free": 204_800,
+  "opencode/qwen3.6-plus-free": 262_144,
+}
 
 export interface Project {
   id: string
   name: string
   createdAt: number
   updatedAt: number
+  tokenUsage?: ProjectTokenUsage
+}
+
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalTokens: number
+  contextWindow?: number
+  remainingTokens?: number
+  costUsd?: number
+}
+
+export interface ProjectTokenUsageRequest extends TokenUsage {
+  id: string
+  message: string
+  model: string
+  createdAt: number
+}
+
+export interface ProjectTokenUsage {
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalReasoningTokens: number
+  totalCacheReadTokens: number
+  totalCacheWriteTokens: number
+  totalTokens: number
+  totalCostUsd: number
+  requestCount: number
+  lastRequest: ProjectTokenUsageRequest | null
+  recentRequests: ProjectTokenUsageRequest[]
 }
 
 interface ProjectsConfig {
   activeProjectId: string | null
   projects: Project[]
+}
+
+function emptyTokenUsage(): ProjectTokenUsage {
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalReasoningTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+    requestCount: 0,
+    lastRequest: null,
+    recentRequests: [],
+  }
+}
+
+function normalizeTokenUsage(usage?: Partial<ProjectTokenUsage>): ProjectTokenUsage {
+  const empty = emptyTokenUsage()
+  if (!usage) return empty
+  const recentRequests = Array.isArray(usage.recentRequests)
+    ? usage.recentRequests.map((request) => {
+        const contextWindow = request.contextWindow ?? FALLBACK_MODEL_CONTEXT_WINDOWS[request.model]
+        return {
+          ...request,
+          contextWindow,
+          remainingTokens: request.remainingTokens ?? (
+            contextWindow !== undefined ? Math.max(contextWindow - request.totalTokens, 0) : undefined
+          ),
+        }
+      })
+    : empty.recentRequests
+  const lastRequest = usage.lastRequest
+    ? recentRequests.find((request) => request.id === usage.lastRequest?.id) || usage.lastRequest
+    : empty.lastRequest
+  return {
+    totalInputTokens: usage.totalInputTokens ?? empty.totalInputTokens,
+    totalOutputTokens: usage.totalOutputTokens ?? empty.totalOutputTokens,
+    totalReasoningTokens: usage.totalReasoningTokens ?? empty.totalReasoningTokens,
+    totalCacheReadTokens: usage.totalCacheReadTokens ?? empty.totalCacheReadTokens,
+    totalCacheWriteTokens: usage.totalCacheWriteTokens ?? empty.totalCacheWriteTokens,
+    totalTokens: usage.totalTokens ?? empty.totalTokens,
+    totalCostUsd: usage.totalCostUsd ?? empty.totalCostUsd,
+    requestCount: usage.requestCount ?? empty.requestCount,
+    lastRequest,
+    recentRequests,
+  }
 }
 
 function slugify(name: string): string {
@@ -83,6 +169,7 @@ export class ProjectManager {
         name: "Projeto Atual",
         createdAt: now,
         updatedAt: now,
+        tokenUsage: emptyTokenUsage(),
       }
 
       const firstProjectDir = this.getProjectDir(firstProject.id)
@@ -130,6 +217,7 @@ export class ProjectManager {
       name: name.trim() || id,
       createdAt: now,
       updatedAt: now,
+      tokenUsage: emptyTokenUsage(),
     }
 
     await this.saveActiveProject(config)
@@ -191,6 +279,50 @@ export class ProjectManager {
     await this.saveConfig(current)
   }
 
+  async recordTokenUsage(message: string, model: string, usage: TokenUsage): Promise<ProjectsConfig> {
+    await this.ensureInitialized()
+    const config = await this.loadConfig()
+    const activeProjectId = config.activeProjectId
+    if (!activeProjectId) return config
+
+    const project = config.projects.find((item) => item.id === activeProjectId)
+    if (!project) return config
+
+    const current = normalizeTokenUsage(project.tokenUsage)
+    const request: ProjectTokenUsageRequest = {
+      id: `usage_${Date.now()}`,
+      message,
+      model,
+      createdAt: Date.now(),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      reasoningTokens: usage.reasoningTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      totalTokens: usage.totalTokens,
+      contextWindow: usage.contextWindow,
+      remainingTokens: usage.remainingTokens,
+      costUsd: usage.costUsd,
+    }
+
+    project.tokenUsage = {
+      totalInputTokens: current.totalInputTokens + usage.inputTokens,
+      totalOutputTokens: current.totalOutputTokens + usage.outputTokens,
+      totalReasoningTokens: current.totalReasoningTokens + usage.reasoningTokens,
+      totalCacheReadTokens: current.totalCacheReadTokens + usage.cacheReadTokens,
+      totalCacheWriteTokens: current.totalCacheWriteTokens + usage.cacheWriteTokens,
+      totalTokens: current.totalTokens + usage.totalTokens,
+      totalCostUsd: current.totalCostUsd + (usage.costUsd || 0),
+      requestCount: current.requestCount + 1,
+      lastRequest: request,
+      recentRequests: [request, ...current.recentRequests].slice(0, MAX_TOKEN_USAGE_REQUESTS),
+    }
+    project.updatedAt = Date.now()
+
+    await this.saveConfig(config)
+    return config
+  }
+
   private getProjectDir(id: string): string {
     return join(PROJECTS_DIR, id)
   }
@@ -200,7 +332,12 @@ export class ProjectManager {
       const data = JSON.parse(await readFile(CONFIG_FILE, "utf-8")) as ProjectsConfig
       return {
         activeProjectId: data.activeProjectId ?? null,
-        projects: Array.isArray(data.projects) ? data.projects : [],
+        projects: Array.isArray(data.projects)
+          ? data.projects.map((project) => ({
+              ...project,
+              tokenUsage: normalizeTokenUsage(project.tokenUsage),
+            }))
+          : [],
       }
     } catch {
       return { activeProjectId: null, projects: [] }

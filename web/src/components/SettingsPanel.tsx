@@ -1,8 +1,21 @@
 import { useState, useEffect } from 'react'
-import { X, Sparkles, Key, Cpu } from 'lucide-react'
+import { X, Sparkles, Key, Cpu, LogIn, RefreshCw, LogOut } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 import { apiClient } from '../api/client'
 import type { ModelOption } from '../types'
+
+interface CodexStatus {
+  available?: boolean
+  authenticated?: boolean
+  output?: string
+  error?: string
+  login?: {
+    running: boolean
+    output: string
+    error: string
+    exitCode: number | null
+  }
+}
 
 export function SettingsPanel() {
   const settings = useAppStore((s) => s.settings)
@@ -17,7 +30,19 @@ export function SettingsPanel() {
   const [model, setModel] = useState(settings.model)
   const [provider, setProvider] = useState(settings.provider)
   const [apiKey, setApiKey] = useState(settings.apiKey)
-  const [activeTab, setActiveTab] = useState<'model' | 'apikey'>('model')
+  const [activeTab, setActiveTab] = useState<'model' | 'apikey' | 'codex'>('model')
+  const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null)
+  const [codexLoading, setCodexLoading] = useState(false)
+
+  const refreshCodexStatus = async () => {
+    setCodexLoading(true)
+    try {
+      setCodexStatus(await apiClient.getCodexStatus())
+    } catch {
+      setCodexStatus({ available: false, authenticated: false, error: 'Failed to check Codex status' })
+    }
+    setCodexLoading(false)
+  }
 
   useEffect(() => {
     if (open) {
@@ -25,8 +50,17 @@ export function SettingsPanel() {
       setProvider(settings.provider)
       setApiKey(settings.apiKey)
       apiClient.getAvailableModels().then(setAvailableModels).catch(() => {})
+      refreshCodexStatus()
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || activeTab !== 'codex' || !codexStatus?.login?.running) return
+    const timer = window.setInterval(() => {
+      refreshCodexStatus()
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [open, activeTab, codexStatus?.login?.running])
 
   const handleSave = async () => {
     setSaving(true)
@@ -36,6 +70,28 @@ export function SettingsPanel() {
       setOpen(false)
     } catch {}
     setSaving(false)
+  }
+
+  const handleCodexLogin = async () => {
+    setCodexLoading(true)
+    try {
+      setCodexStatus(await apiClient.startCodexLogin())
+      window.setTimeout(refreshCodexStatus, 1000)
+    } catch {
+      setCodexStatus({ available: false, authenticated: false, error: 'Failed to start Codex login' })
+    }
+    setCodexLoading(false)
+  }
+
+  const handleCodexLogout = async () => {
+    setCodexLoading(true)
+    try {
+      await apiClient.logoutCodex()
+      await refreshCodexStatus()
+    } catch {
+      setCodexStatus({ available: false, authenticated: false, error: 'Failed to logout Codex' })
+      setCodexLoading(false)
+    }
   }
 
   if (!open) return null
@@ -67,6 +123,14 @@ export function SettingsPanel() {
           >
             <Key size={14} /> API Key
           </button>
+          <button
+            onClick={() => setActiveTab('codex')}
+            className={`flex items-center gap-2 px-5 py-2.5 text-xs font-medium transition-colors ${
+              activeTab === 'codex' ? 'text-zinc-100 border-b-2 border-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+          >
+            <LogIn size={14} /> Codex
+          </button>
         </div>
 
         <div className="p-5 space-y-4">
@@ -82,7 +146,7 @@ export function SettingsPanel() {
                   <option value="">Use Opencode default</option>
                   {availableModels.map((m: ModelOption) => (
                     <option key={m.id} value={m.id}>
-                      {m.name} {m.free ? '(Free)' : ''}
+                      {m.name} {m.free ? '(Free)' : ''} {m.contextWindow ? `- ${(m.contextWindow / 1000).toFixed(0)}k ctx` : ''}
                     </option>
                   ))}
                 </select>
@@ -128,6 +192,60 @@ export function SettingsPanel() {
               </div>
               <p className="text-xs text-zinc-500">
                 Your key is stored locally and never shared.
+              </p>
+            </>
+          )}
+
+          {activeTab === 'codex' && (
+            <>
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-100">Codex account</p>
+                    <p className="text-xs text-zinc-500">
+                      Uses Codex CLI login. Passwords are not stored in this app.
+                    </p>
+                  </div>
+                  <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-medium ${
+                    codexStatus?.authenticated ? 'bg-emerald-500/10 text-emerald-400' : 'bg-zinc-800 text-zinc-400'
+                  }`}>
+                    {codexStatus?.authenticated ? 'Connected' : 'Not connected'}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={handleCodexLogin}
+                    disabled={codexLoading || codexStatus?.login?.running}
+                    className="inline-flex items-center gap-2 rounded-lg bg-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-zinc-100 disabled:opacity-40"
+                  >
+                    <LogIn size={14} /> {codexStatus?.login?.running ? 'Waiting...' : 'Login with Codex'}
+                  </button>
+                  <button
+                    onClick={refreshCodexStatus}
+                    disabled={codexLoading}
+                    className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    <RefreshCw size={14} /> Refresh
+                  </button>
+                  <button
+                    onClick={handleCodexLogout}
+                    disabled={codexLoading || !codexStatus?.authenticated}
+                    className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    <LogOut size={14} /> Logout
+                  </button>
+                </div>
+              </div>
+
+              {(codexStatus?.output || codexStatus?.error || codexStatus?.login?.output || codexStatus?.login?.error) && (
+                <pre className="max-h-40 overflow-auto rounded-lg bg-zinc-950 p-3 text-xs text-zinc-400 border border-zinc-800 whitespace-pre-wrap">
+                  {[codexStatus.output, codexStatus.error, codexStatus.login?.output, codexStatus.login?.error].filter(Boolean).join('\n')}
+                </pre>
+              )}
+
+              <p className="text-xs text-zinc-500">
+                This connects the local Codex CLI account. The current builder engine still runs through Opencode unless the engine is changed separately.
               </p>
             </>
           )}
