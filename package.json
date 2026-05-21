@@ -1,0 +1,13 @@
+{
+  "name": "ai-app-builder",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Standalone AI App Builder powered by Opencode",
+  "scripts": {
+    "dev": "docker compose up -d && docker compose logs -f",
+    "stop": "docker compose down",
+    "rebuild": "docker compose build --no-cache && docker compose up -d",
+    "logs": "docker compose logs -f",
+    "reset": "docker compose down -v && docker compose up -d"
+  }
+}

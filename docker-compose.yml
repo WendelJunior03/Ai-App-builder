@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ai-app-builder
+    ports:
+      - "3000:3000"
+      - "4096:4096"
+      - "5173:5173"
+    volumes:
+      - workspace:/workspace
+      - ./templates:/templates:ro
+      - ./plugins:/plugins:ro
+      - ./server/src:/app/server/src:ro
+      - ./web/dist:/app/web/dist:ro
+    environment:
+      - WORKSPACE_DIR=/workspace
+      - STATIC_DIR=/app/web/dist
+      - PORT=3000
+    networks:
+      - builder-net
+volumes:
+  workspace:
+networks:
+  builder-net:
+    driver: bridge
