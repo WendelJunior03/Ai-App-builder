@@ -1,4 +1,5 @@
 import { useAppStore } from '../stores/appStore'
+import type { TokenUsage } from '../types'
 
 const API_BASE = '/api'
 
@@ -36,6 +37,7 @@ export class ApiClient {
       if (data.response) onChunk(data.response)
       if (data.files) useAppStore.getState().setFiles(data.files)
       if (data.projects) useAppStore.getState().setProjects(data.projects, data.activeProjectId)
+      if (!data.projects && data.tokenUsage) useAppStore.getState().addTokenUsage(data.tokenUsage as TokenUsage)
     }
     onDone()
   }
@@ -120,6 +122,25 @@ export class ApiClient {
     const res = await fetch(`${API_BASE}/settings/models`)
     const data = await res.json()
     return data.models
+  }
+
+  async getCodexStatus() {
+    const res = await fetch(`${API_BASE}/settings/codex/status`)
+    return res.json()
+  }
+
+  async startCodexLogin() {
+    const res = await fetch(`${API_BASE}/settings/codex/login`, {
+      method: 'POST',
+    })
+    return res.json()
+  }
+
+  async logoutCodex() {
+    const res = await fetch(`${API_BASE}/settings/codex/logout`, {
+      method: 'POST',
+    })
+    return res.json()
   }
 }
 

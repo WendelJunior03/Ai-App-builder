@@ -1,12 +1,52 @@
 import { Hono } from "hono"
 import { execSync } from "node:child_process"
 import { workspaceManager } from "../services/workspace"
-import { OpencodeClient } from "../services/opencode-client"
+import { OpencodeClient, type TokenUsage } from "../services/opencode-client"
 import { projectManager } from "../services/projects"
+import { getModelContextWindow, loadSettings } from "./settings"
 import fs from "node:fs"
 
 const chatRoute = new Hono()
 const opencode = new OpencodeClient()
+
+function addUsage(total: TokenUsage | null, next: TokenUsage): TokenUsage {
+  const inputTokens = (total?.inputTokens || 0) + next.inputTokens
+  const outputTokens = (total?.outputTokens || 0) + next.outputTokens
+  const reasoningTokens = (total?.reasoningTokens || 0) + next.reasoningTokens
+  const cacheReadTokens = (total?.cacheReadTokens || 0) + next.cacheReadTokens
+  const cacheWriteTokens = (total?.cacheWriteTokens || 0) + next.cacheWriteTokens
+  const totalTokens = inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens
+  const contextWindow = next.contextWindow ?? total?.contextWindow
+  const remainingTokens = next.remainingTokens ?? (
+    contextWindow !== undefined ? Math.max(contextWindow - totalTokens, 0) : total?.remainingTokens
+  )
+
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens,
+    contextWindow,
+    remainingTokens,
+    costUsd: (total?.costUsd || 0) + (next.costUsd || 0),
+  }
+}
+
+async function applyModelContextWindow(usage: TokenUsage | null): Promise<TokenUsage | null> {
+  if (!usage || usage.contextWindow !== undefined) return usage
+
+  const settings = loadSettings()
+  const contextWindow = await getModelContextWindow(settings.model)
+  if (!contextWindow) return usage
+
+  return {
+    ...usage,
+    contextWindow,
+    remainingTokens: Math.max(contextWindow - usage.totalTokens, 0),
+  }
+}
 
 function getProjectRenameRequest(message: string): string | null {
   const normalized = message
@@ -129,11 +169,15 @@ chatRoute.post("/", async (c) => {
     }
 
     const responses: string[] = []
+    let tokenUsage: TokenUsage | null = null
     const currentFiles = await workspaceManager.listFiles()
 
     await new Promise<void>((resolve, reject) => {
       opencode.sendMessage(addProjectContext(message, currentFiles), {
         onChunk: (text) => responses.push(text),
+        onUsage: (usage) => {
+          tokenUsage = addUsage(tokenUsage, usage)
+        },
         onDone: () => resolve(),
         onError: (err) => reject(err),
       }).catch(reject)
@@ -142,9 +186,17 @@ chatRoute.post("/", async (c) => {
     await projectManager.saveActiveProject()
     const files = await workspaceManager.listFiles()
     const response = responses.join("").trim()
+    const tokenUsageWithContext = await applyModelContextWindow(tokenUsage)
+    const projects = tokenUsageWithContext
+      ? await projectManager.recordTokenUsage(message, loadSettings().model, tokenUsageWithContext)
+      : await projectManager.listProjects()
+
     return c.json({
       response: response || "O motor finalizou, mas nao retornou texto. Verifique os arquivos atualizados no painel ao lado ou tente enviar a instrucao novamente com mais contexto.",
       files,
+      tokenUsage: tokenUsageWithContext,
+      projects: projects.projects,
+      activeProjectId: projects.activeProjectId,
     })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)

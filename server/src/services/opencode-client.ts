@@ -7,8 +7,21 @@ const OPENCODE_TIMEOUT_MS = Number(process.env.OPENCODE_TIMEOUT_MS || 120000)
 
 interface RunEvents {
   onChunk: (text: string) => void
+  onUsage?: (usage: TokenUsage) => void
   onDone: () => void
   onError: (err: Error) => void
+}
+
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalTokens: number
+  contextWindow?: number
+  remainingTokens?: number
+  costUsd?: number
 }
 
 interface FileAction {
@@ -26,6 +39,102 @@ interface PlanProposal {
 function formatWorkspacePath(filePath: unknown): string {
   if (typeof filePath !== "string") return "unknown"
   return filePath.replace(WORKSPACE_DIR, "").replace(/^\/+/, "") || filePath
+}
+
+function findNumber(value: unknown, keys: string[], seen = new Set<unknown>()): number | undefined {
+  if (!value || typeof value !== "object" || seen.has(value)) return undefined
+  seen.add(value)
+
+  const record = value as Record<string, unknown>
+  for (const key of keys) {
+    const direct = record[key]
+    if (typeof direct === "number" && Number.isFinite(direct)) return direct
+    if (typeof direct === "string") {
+      const parsed = Number(direct)
+      if (Number.isFinite(parsed)) return parsed
+    }
+  }
+
+  for (const nested of Object.values(record)) {
+    const found = findNumber(nested, keys, seen)
+    if (found !== undefined) return found
+  }
+
+  return undefined
+}
+
+function normalizeUsage(event: Record<string, unknown>): TokenUsage | null {
+  const source = (event.usage && typeof event.usage === "object")
+    ? event.usage as Record<string, unknown>
+    : event
+
+  const inputTokens = findNumber(source, [
+    "inputTokens",
+    "input_tokens",
+    "promptTokens",
+    "prompt_tokens",
+    "prompt",
+    "input",
+  ]) ?? 0
+  const outputTokens = findNumber(source, [
+    "outputTokens",
+    "output_tokens",
+    "completionTokens",
+    "completion_tokens",
+    "completion",
+    "output",
+  ]) ?? 0
+  const reasoningTokens = findNumber(source, [
+    "reasoningTokens",
+    "reasoning_tokens",
+    "reasoning",
+  ]) ?? 0
+  const cacheReadTokens = findNumber(source, [
+    "cacheReadTokens",
+    "cache_read_tokens",
+    "cacheRead",
+    "cache_read",
+    "cache_read_input_tokens",
+  ]) ?? 0
+  const cacheWriteTokens = findNumber(source, [
+    "cacheWriteTokens",
+    "cache_write_tokens",
+    "cacheWrite",
+    "cache_write",
+    "cache_creation_input_tokens",
+  ]) ?? 0
+  const explicitTotal = findNumber(source, ["totalTokens", "total_tokens", "total"])
+  const totalTokens = explicitTotal ?? inputTokens + outputTokens + reasoningTokens + cacheReadTokens + cacheWriteTokens
+  const contextWindow = findNumber(source, [
+    "contextWindow",
+    "context_window",
+    "contextLimit",
+    "context_limit",
+    "maxTokens",
+    "max_tokens",
+    "limit",
+  ])
+  const explicitRemaining = findNumber(source, ["remainingTokens", "remaining_tokens", "remaining"])
+  const remainingTokens = explicitRemaining ?? (
+    contextWindow !== undefined ? Math.max(contextWindow - totalTokens, 0) : undefined
+  )
+  const costUsd = findNumber(source, ["costUsd", "cost_usd", "cost", "usd"])
+
+  if (!totalTokens && !inputTokens && !outputTokens && !reasoningTokens && !cacheReadTokens && !cacheWriteTokens) {
+    return null
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens,
+    contextWindow,
+    remainingTokens,
+    costUsd,
+  }
 }
 
 function findOpencodeBinary(): string | null {
@@ -193,6 +302,17 @@ export class OpencodeClient extends EventEmitter {
       (event.data as string) ||
       ""
 
+    if (event.type !== "usage" && (
+      (event.usage && typeof event.usage === "object") ||
+      (event.type === "step_finish" || event.type === "step-finish")
+    )) {
+      const usage = normalizeUsage(event)
+      if (usage) {
+        events.onUsage?.(usage)
+        this.emit("usage", usage)
+      }
+    }
+
     if (event.type === "text" && text) {
       events.onChunk(text)
       return true
@@ -201,8 +321,14 @@ export class OpencodeClient extends EventEmitter {
       return true
     } else if (event.type === "step_start" || event.type === "step-start") {
       // Step started - ignore
+    } else if (event.type === "step_finish" || event.type === "step-finish") {
+      // Token usage is handled above.
     } else if (event.type === "usage") {
-      // Token usage info - ignore
+      const usage = normalizeUsage(event)
+      if (usage) {
+        events.onUsage?.(usage)
+        this.emit("usage", usage)
+      }
     } else if (event.type === "file" || event.type === "write") {
       const action = event as unknown as FileAction
       events.onChunk(`\n[File: ${action.type} ${action.path}]\n`)

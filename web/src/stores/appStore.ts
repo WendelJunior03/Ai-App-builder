@@ -1,5 +1,15 @@
 import { create } from 'zustand'
-import type { Message, FileEntry, ApprovalRequest, PanelView, AppSettings, ModelOption, Project } from '../types'
+import type {
+  Message,
+  FileEntry,
+  ApprovalRequest,
+  PanelView,
+  AppSettings,
+  ModelOption,
+  Project,
+  TokenUsage,
+  TokenUsageSummary,
+} from '../types'
 
 interface AppState {
   messages: Message[]
@@ -18,6 +28,7 @@ interface AppState {
   activeProjectId: string | null
   settingsOpen: boolean
   savingSettings: boolean
+  tokenUsage: TokenUsageSummary
 
   addMessage: (msg: Message) => void
   setFiles: (files: FileEntry[]) => void
@@ -32,8 +43,11 @@ interface AppState {
   setSettings: (s: AppSettings) => void
   setAvailableModels: (m: ModelOption[]) => void
   setProjects: (projects: Project[], activeProjectId: string | null) => void
+  setTokenUsage: (usage: TokenUsageSummary | null | undefined) => void
   setSettingsOpen: (open: boolean) => void
   setSavingSettings: (saving: boolean) => void
+  addTokenUsage: (usage: TokenUsage) => void
+  resetTokenUsage: () => void
   updateMessage: (id: string, content: string) => void
   reset: () => void
 }
@@ -55,6 +69,18 @@ const initialState = {
   activeProjectId: null,
   settingsOpen: false,
   savingSettings: false,
+  tokenUsage: {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalReasoningTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    totalTokens: 0,
+    totalCostUsd: 0,
+    requestCount: 0,
+    lastRequest: null,
+    recentRequests: [],
+  },
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -72,9 +98,34 @@ export const useAppStore = create<AppState>((set) => ({
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
   setSettings: (s) => set({ settings: s }),
   setAvailableModels: (m) => set({ availableModels: m }),
-  setProjects: (projects, activeProjectId) => set({ projects, activeProjectId }),
+  setProjects: (projects, activeProjectId) => set({
+    projects,
+    activeProjectId,
+    tokenUsage: projects.find((project) => project.id === activeProjectId)?.tokenUsage || initialState.tokenUsage,
+  }),
+  setTokenUsage: (usage) => set({ tokenUsage: usage || initialState.tokenUsage }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setSavingSettings: (saving) => set({ savingSettings: saving }),
+  addTokenUsage: (usage) => set((s) => ({
+    tokenUsage: {
+      totalInputTokens: s.tokenUsage.totalInputTokens + usage.inputTokens,
+      totalOutputTokens: s.tokenUsage.totalOutputTokens + usage.outputTokens,
+      totalReasoningTokens: s.tokenUsage.totalReasoningTokens + usage.reasoningTokens,
+      totalCacheReadTokens: s.tokenUsage.totalCacheReadTokens + usage.cacheReadTokens,
+      totalCacheWriteTokens: s.tokenUsage.totalCacheWriteTokens + usage.cacheWriteTokens,
+      totalTokens: s.tokenUsage.totalTokens + usage.totalTokens,
+      totalCostUsd: s.tokenUsage.totalCostUsd + (usage.costUsd || 0),
+      requestCount: s.tokenUsage.requestCount + 1,
+      lastRequest: usage,
+      recentRequests: s.tokenUsage.recentRequests,
+    },
+  })),
+  resetTokenUsage: () => set((s) => ({
+    tokenUsage: {
+      ...initialState.tokenUsage,
+      lastRequest: s.tokenUsage.lastRequest,
+    },
+  })),
   updateMessage: (id, content) => set((s) => ({
     messages: s.messages.map((msg) => msg.id === id ? { ...msg, content, timestamp: Date.now() } : msg),
   })),

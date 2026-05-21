@@ -1,4 +1,4 @@
-import { Plus, Settings } from 'lucide-react'
+import { Gauge, Plus, Settings } from 'lucide-react'
 import type { FileEntry, PanelView, Project } from '../types'
 import { useAppStore } from '../stores/appStore'
 import { apiClient } from '../api/client'
@@ -8,6 +8,12 @@ const tabs: { id: PanelView; label: string }[] = [
   { id: 'code', label: 'Code' },
   { id: 'files', label: 'Files' },
 ]
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return String(value)
+}
 
 export function Header() {
   const panelView = useAppStore((s) => s.panelView)
@@ -23,8 +29,31 @@ export function Header() {
   const setSelectedFile = useAppStore((s) => s.setSelectedFile)
   const setFileContent = useAppStore((s) => s.setFileContent)
   const setPreviewUrl = useAppStore((s) => s.setPreviewUrl)
+  const tokenUsage = useAppStore((s) => s.tokenUsage)
 
   const hasCustomModel = settings.model || settings.apiKey
+  const lastUsage = tokenUsage.lastRequest
+  const hasUsage = tokenUsage.totalTokens > 0
+  const contextText = lastUsage?.contextWindow !== undefined
+    ? formatTokens(lastUsage.contextWindow)
+    : '--'
+  const remainingText = lastUsage?.remainingTokens !== undefined
+    ? formatTokens(lastUsage.remainingTokens)
+    : '--'
+  const usageTitle = hasUsage
+    ? [
+        `Total usado: ${tokenUsage.totalTokens.toLocaleString()} tokens`,
+        `Solicitacoes: ${tokenUsage.requestCount.toLocaleString()}`,
+        `Ultimo pedido: ${lastUsage?.totalTokens.toLocaleString() || 0} tokens`,
+        lastUsage?.contextWindow !== undefined ? `Contexto do modelo: ${lastUsage.contextWindow.toLocaleString()} tokens` : 'Contexto do modelo: nao informado',
+        `Entrada: ${tokenUsage.totalInputTokens.toLocaleString()}`,
+        `Saida: ${tokenUsage.totalOutputTokens.toLocaleString()}`,
+        `Raciocinio: ${tokenUsage.totalReasoningTokens.toLocaleString()}`,
+        `Cache read: ${tokenUsage.totalCacheReadTokens.toLocaleString()}`,
+        `Cache write: ${tokenUsage.totalCacheWriteTokens.toLocaleString()}`,
+        lastUsage?.remainingTokens !== undefined ? `Restante: ${lastUsage.remainingTokens.toLocaleString()}` : 'Restante: nao informado pelo motor',
+      ].join('\n')
+    : 'Tokens usados nesta sessao'
 
   const refreshProjectState = (data: { projects: Project[]; activeProjectId: string | null; files?: FileEntry[] }) => {
     setProjects(data.projects, data.activeProjectId)
@@ -87,7 +116,28 @@ export function Header() {
           ))}
         </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <div
+          className="hidden md:flex h-7 items-center gap-2 rounded border border-zinc-800 bg-zinc-950/70 px-2 text-[10px] text-zinc-400"
+          title={usageTitle}
+        >
+          <Gauge size={13} className={hasUsage ? 'text-emerald-400' : 'text-zinc-600'} />
+          <span className="whitespace-nowrap">
+            usado <span className="font-mono text-zinc-200">{formatTokens(tokenUsage.totalTokens)}</span>
+          </span>
+          <span className="h-3 w-px bg-zinc-800" />
+          <span className="whitespace-nowrap">
+            req <span className="font-mono text-zinc-200">{tokenUsage.requestCount}</span>
+          </span>
+          <span className="h-3 w-px bg-zinc-800" />
+          <span className="whitespace-nowrap">
+            ctx <span className="font-mono text-zinc-200">{contextText}</span>
+          </span>
+          <span className="h-3 w-px bg-zinc-800" />
+          <span className="whitespace-nowrap">
+            falta <span className="font-mono text-zinc-200">{remainingText}</span>
+          </span>
+        </div>
         {sessionId && (
           <span className="text-[10px] text-zinc-500 font-mono">session: {sessionId.slice(0, 8)}</span>
         )}
