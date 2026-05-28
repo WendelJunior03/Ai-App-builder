@@ -3,6 +3,14 @@ import type { TokenUsage } from '../types'
 
 const API_BASE = '/api'
 
+async function getErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json()
+    if (typeof data?.error === 'string' && data.error.trim()) return data.error
+  } catch {}
+  return fallback
+}
+
 export class ApiClient {
   private abortController: AbortController | null = null
 
@@ -28,7 +36,9 @@ export class ApiClient {
       signal: this.abortController.signal,
     })
 
-    if (!res.ok) throw new Error(`Chat error: ${res.status}`)
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res, `Chat error: ${res.status}`))
+    }
 
     const data = await res.json()
     if (data.error) {
@@ -70,7 +80,9 @@ export class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
-    if (!res.ok) throw new Error(`Create project error: ${res.status}`)
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res, `Create project error: ${res.status}`))
+    }
     return res.json()
   }
 
@@ -78,7 +90,9 @@ export class ApiClient {
     const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(id)}/select`, {
       method: 'POST',
     })
-    if (!res.ok) throw new Error(`Select project error: ${res.status}`)
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res, `Select project error: ${res.status}`))
+    }
     return res.json()
   }
 

@@ -91,13 +91,22 @@ function addProjectContext(message: string, files: Array<{ path: string; type: "
   const sourceFiles = files
     .filter((file) => file.type === "file")
     .map((file) => file.path)
-    .filter((path) => /^src\/.*\.(tsx|jsx|ts|js|css)$/.test(path) || path === "package.json")
+    .filter((path) =>
+      /^src\/.*\.(tsx|jsx|ts|js|css)$/.test(path) ||
+      path === "src/ARCHITECTURE.md" ||
+      path === "package.json"
+    )
     .sort((a, b) => {
       const priority = (path: string) => {
-        if (path === "src/App.tsx") return 0
-        if (path.startsWith("src/components/")) return 1
-        if (path === "src/index.css") return 2
-        return 3
+        if (path === "src/ARCHITECTURE.md") return 0
+        if (path === "src/app/App.tsx") return 1
+        if (path === "src/app/routes.tsx") return 2
+        if (path.startsWith("src/pages/")) return 3
+        if (path.startsWith("src/features/")) return 4
+        if (path.startsWith("src/components/")) return 5
+        if (path === "src/App.tsx") return 6
+        if (path === "src/index.css") return 7
+        return 8
       }
       return priority(a) - priority(b) || a.localeCompare(b)
     })
@@ -110,6 +119,24 @@ function addProjectContext(message: string, files: Array<{ path: string; type: "
     "Nao pare apenas lendo ou explicando.",
     "Se o pedido citar texto, secao, card, grafico ou botao, encontre esse trecho no codigo e altere somente ele.",
     "Para graficos, use Recharts ja existente e substitua somente o grafico solicitado.",
+    "",
+    "Arquitetura obrigatoria do app:",
+    "- Nao concentre a implementacao em src/App.tsx nem em src/app/App.tsx.",
+    "- Use src/app apenas para composicao geral, providers e rotas.",
+    "- Crie paginas em src/pages.",
+    "- Crie funcionalidades em src/features/<feature-name>.",
+    "- Componentes especificos de uma feature devem ficar em src/features/<feature-name>/components.",
+    "- Hooks especificos devem ficar em src/features/<feature-name>/hooks.",
+    "- Servicos, mocks ou logica de dados da feature devem ficar em src/features/<feature-name>/services.",
+    "- Componentes reutilizaveis devem ficar em src/components/ui ou src/components/layout.",
+    "- Tipos compartilhados devem ficar em src/shared/types.",
+    "- Utilitarios compartilhados devem ficar em src/shared/lib.",
+    "- Regras de negocio devem ficar em src/domain ou src/application quando fizer sentido.",
+    "- Integracoes externas, APIs, repositories e mocks globais devem ficar em src/infrastructure.",
+    "- Arquivos com JSX devem usar extensao .tsx. Nao coloque JSX em arquivos .ts.",
+    "- Hooks em src/features/<feature-name>/hooks devem ficar sem JSX; providers/contextos que renderizam JSX devem ser .tsx.",
+    "- Antes de importar uma pagina, componente, hook ou servico novo, crie o arquivo correspondente no caminho importado.",
+    "- Ao criar uma nova tela ou funcionalidade, crie arquivos novos na pasta correta em vez de colocar tudo em um unico arquivo.",
     "Nao altere .builder, projects ou node_modules.",
     "Responda brevemente os arquivos alterados.",
     "",
@@ -200,6 +227,11 @@ chatRoute.post("/", async (c) => {
     })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
+    console.error("[chat] request failed", {
+      message,
+      error: msg,
+      stack: err instanceof Error ? err.stack : undefined,
+    })
     return c.json({ error: msg }, 500)
   }
 })
